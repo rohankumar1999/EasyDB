@@ -199,62 +199,51 @@ typedef enum error_return_codes
 	MEMORY_ERROR,							  // -297
 	FILE_REMOVE_ERROR,                     // -296
 	TABFILE_CORRUPTION,                    // -295
-	INVALID_BACKUP_FILENAME,               // -294
-	BACKUP_FILE_EXISTS,                    // -293
-	ROLLFORWARD_PENDING_ACCESS_VIOLATION,  // -292
-	MISSING_BACKUP_LOG_ENTRY,              // -291
-	MISSING_BACKUP_FILE,                   // -290
-	DUPLICATE_BACKUP_LOG_ENTRY,            // -289
-	MISSING_RF_START_LOG_ENTRY,            // -288
-	DUPLICATE_RF_START_LOG_ENTRY,          // -287
-	DB_NOT_IN_ROLLFORWARD_PENDING_STATE,   // -286
-	INVALID_TIMESTAMP_FORMAT               // -285
 } return_codes;
 
 /* Table file structures in which we store records of that table */
-typedef struct table_file_header_def {
-  int file_size;
-  int record_size;
+typedef struct table_file_def {
+  int table_file_len;
+  int record_len;
   int num_records;
-  int record_offset;
-  int file_header_flag;
+  int offset;
   tpd_entry *tpd_ptr;
-} table_file_header;
+} table_file;
 
-typedef enum field_value_type_def {
-  FIELD_VALUE_TYPE_UNKNOWN = 0,  // 0
-  FIELD_VALUE_TYPE_INT,          // 1
-  FIELD_VALUE_TYPE_STRING        // 2
-} field_value_type;
+typedef enum value_type_def {
+  UNKNOWN_FIELD = 0,  // 0
+  INT_FIELD,          // 1
+  STRING_FIELD        // 2
+} value_type;
 
 /* The structure to represent the int/string typed value in each record field.
  */
 typedef struct field_value_def {
-  int type;  // The enum of field_value_type.
-  bool is_null;
-  int int_value;                          // Fill int value here.
-  char string_value[MAX_STRING_LEN + 1];  // Fill string value here.
-  token_list *linked_token;               // Point to the original token.
-  int col_id;                             // Column ID.
-} field_value;
+  int type;
+  bool null_type;
+  int int_field;
+  char string_field[MAX_STRING_LEN + 1];
+  token_list *token;
+  int col_id;
+} field_val;
 
 /* The structure to represent the field value of each record field. */
-typedef struct field_name_def {
-  char name[MAX_IDENT_LEN + 1];  // Fill field name here.
-  token_list *linked_token;      // Point to the original token.
-} field_name;
+typedef struct record_field_name_def {
+  char name[MAX_IDENT_LEN + 1];
+  token_list *token;
+} record_field_name;
 
 /* One row as a record of DB */
 typedef struct record_row_def {
   int num_fields;
-  field_value *value_ptrs[MAX_NUM_COL];
-  int sorting_col_id;
+  field_val *value_ptrs[MAX_NUM_COL];
+  int sort_column;
   struct record_row_def *next;
 } record_row;
 
 /* Condition in record-level predicate by WHERE clause. */
 typedef struct record_condition_def {
-  int value_type;  // The enum of field_value_type. It is available only the
+  int value_type;  // The enum of value_type. It is available only the
                    // operator is in {S_LESS, S_GREATER, S_EQUAL}.
   int col_id;      // LHS operand.
   int op_type;  // Relational operator, can be S_LESS, S_GREATER, S_EQUAL, K_IS
@@ -299,19 +288,19 @@ int add_tpd_to_list(tpd_entry *tpd);
 int drop_tpd_from_list(char *tabname);
 tpd_entry* get_tpd_from_list(char *tabname);
 int create_tab_file(char *table_name, cd_entry cd_entries[], int num_columns);
-int check_insert_values(field_value field_values[], int num_values,
+int check_insert_values(field_val field_values[], int num_values,
                         cd_entry cd_entries[], int num_columns);
 void free_token_list(token_list *const t_list);
-int load_table_records(tpd_entry *tpd, table_file_header **pp_table_header);
+int load_table_records(tpd_entry *tpd, table_file **pp_table_header);
 int get_file_size(FILE *fhandle);
-int fill_raw_record_bytes(cd_entry cd_entries[], field_value *field_values[],
+int fill_raw_record_bytes(cd_entry cd_entries[], field_val *field_values[],
                           int num_cols, char record_bytes[],
                           int num_record_bytes);
 int fill_record_row(cd_entry cd_entries[], int num_cols, record_row *p_row,
                     char record_bytes[]);
 void print_table_border(cd_entry *sorted_cd_entries[], int num_values);
 void print_table_column_names(cd_entry *sorted_cd_entries[],
-                              field_name field_names[], int num_values);
+                              record_field_name field_names[], int num_values);
 void print_record_row(cd_entry *sorted_cd_entries[], int num_cols,
                       record_row *row);
 void print_aggregate_result(int aggregate_type, int num_fields,
@@ -321,13 +310,13 @@ int column_display_width(cd_entry *col_entry);
 int get_cd_entry_index(cd_entry cd_entries[], int num_cols, char *col_name);
 bool apply_row_predicate(cd_entry cd_entries[], int num_cols, record_row *p_row,
                          record_predicate *p_predicate);
-bool eval_condition(record_condition *p_condition, field_value *p_field_value);
+bool eval_condition(record_condition *p_condition, field_val *p_field_value);
 void sort_records(record_row rows[], int num_records, cd_entry *p_sorting_col,
                   bool is_desc);
 int execute_statement(char *statement, int verbose);
 int records_comparator(const void *arg1, const void *arg2);
 void free_record_row(record_row *row, bool to_last);
-int save_records_to_file(table_file_header *const tab_header,
+int save_records_to_file(table_file *const tab_header,
                          record_row *const rows_head);
 int reload_global_tpd_list();
 int append_log_with_timestamp(const char *msg, time_t timestamp);
@@ -347,10 +336,10 @@ inline void get_cd_entries(tpd_entry *tab_entry, cd_entry **pp_cd_entry) {
 }
 
 /* Get pointer to the first record in a table. */
-inline void get_table_records(table_file_header *tab_header, char **pp_record) {
+inline void get_table_records(table_file *tab_header, char **pp_record) {
   *pp_record = NULL;
-  if (tab_header->file_size > tab_header->record_offset) {
-    *pp_record = ((char *)tab_header) + tab_header->record_offset;
+  if (tab_header->table_file_len > tab_header->offset) {
+    *pp_record = ((char *)tab_header) + tab_header->offset;
   }
 }
 
@@ -1272,13 +1261,11 @@ int sem_insert(token_list *t_list) {
 	token_list *cur = t_list;
 	printf("heree-1");
 	if (!can_be_identifier(cur)) {
-		// Error
 		rc = INVALID_TABLE_NAME;
 		cur->tok_value = INVALID;
 		return rc;
 	}
 
-	// Check whether the table name exists.
 	tpd_entry *tab_entry = get_tpd_from_list(cur->tok_string);
 
 	if (tab_entry == NULL) {
@@ -1296,12 +1283,9 @@ int sem_insert(token_list *t_list) {
 
 	cur = cur->next->next;
 
-	// Read all the value tokens and store them in a field_value array.
-	bool values_done = false;
-	field_value field_values[MAX_NUM_COL];
-	memset(field_values, '\0', sizeof(field_values));
+	field_val *field_values = (field_val *)calloc(MAX_NUM_COL, sizeof(field_val));
 	int num_values = 0;
-	while (!values_done) {
+	while (true) {
 		// Check if values count is greater than MAX_NUM_COL.
 		if (num_values >= MAX_NUM_COL) {
 			rc = MAX_COLUMN_EXCEEDED;
@@ -1310,23 +1294,23 @@ int sem_insert(token_list *t_list) {
 		}
 
 		if (cur->tok_value == STRING_LITERAL) {
-			field_values[num_values].type = FIELD_VALUE_TYPE_STRING;
-			field_values[num_values].is_null = false;
-			strcpy(field_values[num_values].string_value, cur->tok_string);
-			field_values[num_values].linked_token = cur;
+			field_values[num_values].type = STRING_FIELD;
+			field_values[num_values].null_type = false;
+			strcpy(field_values[num_values].string_field, cur->tok_string);
+			field_values[num_values].token = cur;
 			field_values[num_values].col_id = num_values;
 		}
 		else if (cur->tok_value == INT_LITERAL) {
-			field_values[num_values].type = FIELD_VALUE_TYPE_INT;
-			field_values[num_values].is_null = false;
-			field_values[num_values].int_value = atoi(cur->tok_string);
-			field_values[num_values].linked_token = cur;
+			field_values[num_values].type = INT_FIELD;
+			field_values[num_values].null_type = false;
+			field_values[num_values].int_field = atoi(cur->tok_string);
+			field_values[num_values].token = cur;
 			field_values[num_values].col_id = num_values;
 		}
 		else if (cur->tok_value == K_NULL) {
-			field_values[num_values].type = FIELD_VALUE_TYPE_UNKNOWN;
-			field_values[num_values].is_null = true;
-			field_values[num_values].linked_token = cur;
+			field_values[num_values].type = UNKNOWN_FIELD;
+			field_values[num_values].null_type = true;
+			field_values[num_values].token = cur;
 			field_values[num_values].col_id = num_values;
 		}
 		else {
@@ -1335,10 +1319,11 @@ int sem_insert(token_list *t_list) {
 		}
 		cur = cur->next;
 		if (cur->tok_value == S_COMMA) {
-			// nothing to do
 		}
 		else if (cur->tok_value == S_RIGHT_PAREN) {
-			values_done = true;
+			cur = cur->next;
+			num_values++;
+			break;
 		}
 		else {
 			rc = INVALID_STATEMENT;
@@ -1348,7 +1333,7 @@ int sem_insert(token_list *t_list) {
 		num_values++;
 	}
 	printf("heree-2");
-	if (values_done && (cur->tok_value != EOC)) {
+	if (cur->tok_value != EOC) {
 		rc = INVALID_STATEMENT;
 		cur->tok_value = INVALID;
 		return rc;
@@ -1373,7 +1358,7 @@ int sem_insert(token_list *t_list) {
 	printf("heree2");
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
-	table_file_header *tab_header = NULL;
+	table_file *tab_header = NULL;
 	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
 		
 	printf("heree3");
@@ -1386,13 +1371,13 @@ int sem_insert(token_list *t_list) {
 	}
 	printf("heree4");
 	// Compose the new record.
-	char *record_bytes = (char *)malloc(tab_header->record_size);
-	field_value *field_value_ptrs[MAX_NUM_COL];
+	char *record_bytes = (char *)malloc(tab_header->record_len);
+	field_val *field_value_ptrs[MAX_NUM_COL];
 	for (int i = 0; i < num_values; i++) {
 		field_value_ptrs[i] = &field_values[i];
 	}
 	fill_raw_record_bytes(cd_entries, field_value_ptrs, num_values, record_bytes,
-		tab_header->record_size);
+		tab_header->record_len);
 	printf("heree0");
 	// Append the new record to the .tab file.
 	char table_filename[MAX_IDENT_LEN + 5];
@@ -1403,13 +1388,13 @@ int sem_insert(token_list *t_list) {
 	}
 	else {
 		// Add one more record in the table header.
-		int old_table_file_size = tab_header->file_size;
+		int old_table_file_size = tab_header->table_file_len;
 		tab_header->num_records++;
-		tab_header->file_size += tab_header->record_size;
+		tab_header->table_file_len += tab_header->record_len;
 		tab_header->tpd_ptr = NULL;  // Reset tpd pointer.
 
 		fwrite(tab_header, old_table_file_size, 1, fhandle);
-		fwrite(record_bytes, tab_header->record_size, 1, fhandle);
+		fwrite(record_bytes, tab_header->record_len, 1, fhandle);
 		fflush(fhandle);
 		fclose(fhandle);
 	}
@@ -1423,7 +1408,7 @@ int sem_select(token_list *t_list) {
 	int rc = 0;
 	token_list *cur = t_list;
 
-	field_name field_names[MAX_NUM_COL];
+	record_field_name field_names[MAX_NUM_COL];
 	bool fields_done = false;
 	int wildcard_field_index = -1;
 	int num_fields = 0;
@@ -1440,7 +1425,7 @@ int sem_select(token_list *t_list) {
 		}
 		cur = cur->next->next;
 		strcpy(field_names[num_fields].name, cur->tok_string);
-		field_names[num_fields].linked_token = cur;
+		field_names[num_fields].token = cur;
 		if (strcmp(cur->tok_string, "*") == 0) {
 			wildcard_field_index = 0;
 		}
@@ -1485,7 +1470,7 @@ int sem_select(token_list *t_list) {
 			}
 		}
 		strcpy(field_names[num_fields].name, cur->tok_string);
-		field_names[num_fields].linked_token = cur;
+		field_names[num_fields].token = cur;
 		num_fields++;
 		cur = cur->next;
 		if (cur->tok_value == S_COMMA) {
@@ -1523,11 +1508,11 @@ int sem_select(token_list *t_list) {
 
 	// Expand wildcard field to all field names of the table.
 	if (wildcard_field_index == 0) {
-		token_list *wildcard_token = field_names[wildcard_field_index].linked_token;
+		token_list *wildcard_token = field_names[wildcard_field_index].token;
 		num_fields = tab_entry->num_columns;
 		for (int i = 0; i < num_fields; i++) {
 			strcpy(field_names[i].name, cd_entries[i].col_name);
-			field_names[i].linked_token = wildcard_token;
+			field_names[i].token = wildcard_token;
 		}
 	}
 
@@ -1538,7 +1523,7 @@ int sem_select(token_list *t_list) {
 		int col_index = get_cd_entry_index(cd_entries, tab_entry->num_columns, field_names[i].name);
 		if (col_index < 0) {
 			rc = INVALID_COLUMN_NAME;
-			field_names[i].linked_token->tok_value = INVALID;
+			field_names[i].token->tok_value = INVALID;
 			return rc;
 		} else {
 			// SUM and AVG aggregate functions are only valid on the unique interger
@@ -1548,7 +1533,7 @@ int sem_select(token_list *t_list) {
 					sorted_cd_entries[i] = &cd_entries[col_index];
 				} else {
 					rc = INVALID_AGGREGATE_COLUMN;
-					field_names[i].linked_token->tok_value = INVALID;
+					field_names[i].token->tok_value = INVALID;
 					return rc;
 				}
 			} else {
@@ -1580,8 +1565,8 @@ int sem_select(token_list *t_list) {
 					row_filter.conditions[num_conditions].col_id = col_index;
 					row_filter.conditions[num_conditions].value_type =
 						((cd_entries[col_index].col_type == T_INT)
-							? FIELD_VALUE_TYPE_INT
-							: FIELD_VALUE_TYPE_STRING);
+							? INT_FIELD
+							: STRING_FIELD);
 				} else {
 					rc = INVALID_COLUMN_NAME;
 					cur->tok_value = INVALID;
@@ -1599,7 +1584,7 @@ int sem_select(token_list *t_list) {
 				row_filter.conditions[num_conditions].op_type = cur->tok_value;
 				cur = cur->next;
 				if (cur->tok_value == INT_LITERAL) {
-					if (row_filter.conditions[num_conditions].value_type == FIELD_VALUE_TYPE_INT) {
+					if (row_filter.conditions[num_conditions].value_type == INT_FIELD) {
 						row_filter.conditions[num_conditions].int_data_value = atoi(cur->tok_string);
 					} else {
 						rc = INVALID_CONDITION_OPERAND;
@@ -1607,7 +1592,7 @@ int sem_select(token_list *t_list) {
 						return rc;
 					}
 				} else if (cur->tok_value == STRING_LITERAL) {
-					if (row_filter.conditions[num_conditions].value_type == FIELD_VALUE_TYPE_STRING) {
+					if (row_filter.conditions[num_conditions].value_type == STRING_FIELD) {
 						strcpy(row_filter.conditions[num_conditions].string_data_value, cur->tok_string);
 					} else {
 						rc = INVALID_CONDITION_OPERAND;
@@ -1684,7 +1669,7 @@ int sem_select(token_list *t_list) {
 
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
-	table_file_header *tab_header = NULL;
+	table_file *tab_header = NULL;
 	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
@@ -1718,14 +1703,14 @@ int sem_select(token_list *t_list) {
 
 			if ((aggregate_type == F_SUM) || (aggregate_type == F_AVG)) {
 				// SUM(col) or AVG(col), ignore NULL rows.
-				if (!p_current_row->value_ptrs[sorted_cd_entries[0]->col_id]->is_null) {
-					aggregate_int_sum += p_current_row->value_ptrs[sorted_cd_entries[0]->col_id]->int_value;
+				if (!p_current_row->value_ptrs[sorted_cd_entries[0]->col_id]->null_type) {
+					aggregate_int_sum += p_current_row->value_ptrs[sorted_cd_entries[0]->col_id]->int_field;
 					aggregate_records_count++;
 				}
 			} else if (aggregate_type == F_COUNT) {
 				if (num_fields == 1) {
 					// count(col), ignore NULL rows.
-					if (!p_current_row->value_ptrs[sorted_cd_entries[0]->col_id]->is_null) {
+					if (!p_current_row->value_ptrs[sorted_cd_entries[0]->col_id]->null_type) {
 						aggregate_records_count++;
 					}
 				} else {
@@ -1736,7 +1721,7 @@ int sem_select(token_list *t_list) {
 		}
 
 		// Move forward to next record.
-		record_in_table += tab_header->record_size;
+		record_in_table += tab_header->record_len;
 	}
 	if (aggregate_type == 0) {
 		print_table_border(sorted_cd_entries, num_fields);
@@ -1799,7 +1784,7 @@ int sem_update(token_list *t_list) {
 
 	// Parse field name of the value to be updated.
 	cur = cur->next;
-	field_value value_to_update;
+	field_val value_to_update;
 	bool value_to_update_can_be_null = false;
 	memset(&value_to_update, '\0', sizeof(value_to_update));
 	if (can_be_identifier(cur)) {
@@ -1807,10 +1792,10 @@ int sem_update(token_list *t_list) {
 			get_cd_entry_index(cd_entries, tab_entry->num_columns, cur->tok_string);
 		if (col_index > -1) {
 			value_to_update.col_id = col_index;
-			value_to_update.linked_token = cur;
+			value_to_update.token = cur;
 			value_to_update.type =
-				((cd_entries[col_index].col_type == T_INT) ? FIELD_VALUE_TYPE_INT
-					: FIELD_VALUE_TYPE_STRING);
+				((cd_entries[col_index].col_type == T_INT) ? INT_FIELD
+					: STRING_FIELD);
 			value_to_update_can_be_null = !cd_entries[col_index].not_null;
 		}
 		else {
@@ -1835,9 +1820,9 @@ int sem_update(token_list *t_list) {
 	// Parse field value of the value to be updated.
 	cur = cur->next;
 	if (cur->tok_value == STRING_LITERAL) {
-		if (value_to_update.type == FIELD_VALUE_TYPE_STRING) {
-			strcpy(value_to_update.string_value, cur->tok_string);
-			value_to_update.is_null = false;
+		if (value_to_update.type == STRING_FIELD) {
+			strcpy(value_to_update.string_field, cur->tok_string);
+			value_to_update.null_type = false;
 		}
 		else {
 			rc = DATA_TYPE_MISMATCH;
@@ -1846,9 +1831,9 @@ int sem_update(token_list *t_list) {
 		}
 	}
 	else if (cur->tok_value == INT_LITERAL) {
-		if (value_to_update.type == FIELD_VALUE_TYPE_INT) {
-			value_to_update.int_value = atoi(cur->tok_string);
-			value_to_update.is_null = false;
+		if (value_to_update.type == INT_FIELD) {
+			value_to_update.int_field = atoi(cur->tok_string);
+			value_to_update.null_type = false;
 		}
 		else {
 			rc = DATA_TYPE_MISMATCH;
@@ -1858,7 +1843,7 @@ int sem_update(token_list *t_list) {
 	}
 	else if (cur->tok_value == K_NULL) {
 		if (value_to_update_can_be_null) {
-			value_to_update.is_null = true;
+			value_to_update.null_type = true;
 		}
 		else {
 			rc = UNEXPECTED_NULL_VALUE;
@@ -1891,8 +1876,8 @@ int sem_update(token_list *t_list) {
 				row_filter.conditions[0].col_id = col_index;
 				row_filter.conditions[0].value_type =
 					((cd_entries[col_index].col_type == T_INT)
-						? FIELD_VALUE_TYPE_INT
-						: FIELD_VALUE_TYPE_STRING);
+						? INT_FIELD
+						: STRING_FIELD);
 			}
 			else {
 				rc = INVALID_COLUMN_NAME;
@@ -1913,7 +1898,7 @@ int sem_update(token_list *t_list) {
 			row_filter.conditions[0].op_type = cur->tok_value;
 			cur = cur->next;
 			if (cur->tok_value == INT_LITERAL) {
-				if (row_filter.conditions[0].value_type == FIELD_VALUE_TYPE_INT) {
+				if (row_filter.conditions[0].value_type == INT_FIELD) {
 					row_filter.conditions[0].int_data_value = atoi(cur->tok_string);
 				}
 				else {
@@ -1923,7 +1908,7 @@ int sem_update(token_list *t_list) {
 				}
 			}
 			else if (cur->tok_value == STRING_LITERAL) {
-				if (row_filter.conditions[0].value_type == FIELD_VALUE_TYPE_STRING) {
+				if (row_filter.conditions[0].value_type == STRING_FIELD) {
 					strcpy(row_filter.conditions[0].string_data_value, cur->tok_string);
 				}
 				else {
@@ -1964,7 +1949,7 @@ int sem_update(token_list *t_list) {
 
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
-	table_file_header *tab_header = NULL;
+	table_file *tab_header = NULL;
 	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
@@ -1990,48 +1975,48 @@ int sem_update(token_list *t_list) {
 				&row_filter)) {
 			// Only update the record if the value is really changed.
 			bool value_changed = false;
-			if (value_to_update.type == FIELD_VALUE_TYPE_INT) {
-				if (value_to_update.is_null) {
+			if (value_to_update.type == INT_FIELD) {
+				if (value_to_update.null_type) {
 					// Update NULL integer value.
-					if (!p_current_row->value_ptrs[value_to_update.col_id]->is_null) {
-						p_current_row->value_ptrs[value_to_update.col_id]->is_null = true;
-						p_current_row->value_ptrs[value_to_update.col_id]->int_value = 0;
+					if (!p_current_row->value_ptrs[value_to_update.col_id]->null_type) {
+						p_current_row->value_ptrs[value_to_update.col_id]->null_type = true;
+						p_current_row->value_ptrs[value_to_update.col_id]->int_field = 0;
 						value_changed = true;
 					}
 				}
 				else {
 					// Update real integer value.
-					if (p_current_row->value_ptrs[value_to_update.col_id]->is_null ||
-						p_current_row->value_ptrs[value_to_update.col_id]->int_value !=
-						value_to_update.int_value) {
-						p_current_row->value_ptrs[value_to_update.col_id]->is_null = false;
-						p_current_row->value_ptrs[value_to_update.col_id]->int_value =
-							value_to_update.int_value;
+					if (p_current_row->value_ptrs[value_to_update.col_id]->null_type ||
+						p_current_row->value_ptrs[value_to_update.col_id]->int_field !=
+						value_to_update.int_field) {
+						p_current_row->value_ptrs[value_to_update.col_id]->null_type = false;
+						p_current_row->value_ptrs[value_to_update.col_id]->int_field =
+							value_to_update.int_field;
 						value_changed = true;
 					}
 				}
 			}
 			else {
-				if (value_to_update.is_null) {
+				if (value_to_update.null_type) {
 					// Update NULL string value.
-					if (!p_current_row->value_ptrs[value_to_update.col_id]->is_null) {
-						p_current_row->value_ptrs[value_to_update.col_id]->is_null = true;
+					if (!p_current_row->value_ptrs[value_to_update.col_id]->null_type) {
+						p_current_row->value_ptrs[value_to_update.col_id]->null_type = true;
 						memset(
-							p_current_row->value_ptrs[value_to_update.col_id]->string_value,
+							p_current_row->value_ptrs[value_to_update.col_id]->string_field,
 							'\0', MAX_STRING_LEN + 1);
 						value_changed = true;
 					}
 				}
 				else {
 					// Update real string value.
-					if (p_current_row->value_ptrs[value_to_update.col_id]->is_null ||
+					if (p_current_row->value_ptrs[value_to_update.col_id]->null_type ||
 						strcmp(p_current_row->value_ptrs[value_to_update.col_id]
-							->string_value,
-							value_to_update.string_value) != 0) {
-						p_current_row->value_ptrs[value_to_update.col_id]->is_null = false;
+							->string_field,
+							value_to_update.string_field) != 0) {
+						p_current_row->value_ptrs[value_to_update.col_id]->null_type = false;
 						strcpy(
-							p_current_row->value_ptrs[value_to_update.col_id]->string_value,
-							value_to_update.string_value);
+							p_current_row->value_ptrs[value_to_update.col_id]->string_field,
+							value_to_update.string_field);
 						value_changed = true;
 					}
 				}
@@ -2039,13 +2024,13 @@ int sem_update(token_list *t_list) {
 			if (value_changed) {
 				fill_raw_record_bytes(cd_entries, p_current_row->value_ptrs,
 					tab_entry->num_columns, record_in_table,
-					tab_header->record_size);
+					tab_header->record_len);
 				num_affected_records++;
 			}
 		}
 
 		// Move forward to the next record.
-		record_in_table += tab_header->record_size;
+		record_in_table += tab_header->record_len;
 	}
 
 	printf("Affected records: %d\n", num_affected_records);
@@ -2060,7 +2045,7 @@ int sem_update(token_list *t_list) {
 		}
 		else {
 			tab_header->tpd_ptr = NULL;  // Reset tpd pointer.
-			fwrite(tab_header, tab_header->file_size, 1, fhandle);
+			fwrite(tab_header, tab_header->table_file_len, 1, fhandle);
 			fflush(fhandle);
 			fclose(fhandle);
 		}
@@ -2115,8 +2100,8 @@ int sem_delete(token_list *t_list) {
 				row_filter.conditions[0].col_id = col_index;
 				row_filter.conditions[0].value_type =
 					((cd_entries[col_index].col_type == T_INT)
-					? FIELD_VALUE_TYPE_INT
-					: FIELD_VALUE_TYPE_STRING);
+					? INT_FIELD
+					: STRING_FIELD);
 			} else {
 				rc = INVALID_COLUMN_NAME;
 				cur->tok_value = INVALID;
@@ -2135,7 +2120,7 @@ int sem_delete(token_list *t_list) {
 			row_filter.conditions[0].op_type = cur->tok_value;
 			cur = cur->next;
 			if (cur->tok_value == INT_LITERAL) {
-				if (row_filter.conditions[0].value_type == FIELD_VALUE_TYPE_INT) {
+				if (row_filter.conditions[0].value_type == INT_FIELD) {
 					row_filter.conditions[0].int_data_value = atoi(cur->tok_string);
 				} else {
 					rc = INVALID_CONDITION_OPERAND;
@@ -2143,7 +2128,7 @@ int sem_delete(token_list *t_list) {
 					return rc;
 				}
 			} else if (cur->tok_value == STRING_LITERAL) {
-				if (row_filter.conditions[0].value_type == FIELD_VALUE_TYPE_STRING) {
+				if (row_filter.conditions[0].value_type == STRING_FIELD) {
 					strcpy(row_filter.conditions[0].string_data_value, cur->tok_string);
 				} else {
 					rc = INVALID_CONDITION_OPERAND;
@@ -2179,7 +2164,7 @@ int sem_delete(token_list *t_list) {
 
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
-	table_file_header *tab_header = NULL;
+	table_file *tab_header = NULL;
 	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
@@ -2222,7 +2207,7 @@ int sem_delete(token_list *t_list) {
 		}
 
 		// Move forward to the next record.
-		record_in_table += tab_header->record_size;
+		record_in_table += tab_header->record_len;
 	}
 
 	printf("Affected records: %d\n", num_affected_records);
@@ -2478,20 +2463,19 @@ tpd_entry* get_tpd_from_list(char *tabname)
 
 int create_tab_file(char *table_name, cd_entry cd_entries[], int num_columns) {
   int rc = 0;
-  table_file_header tab_header;
+  table_file tab_header;
 
-  int record_size = 0;
+  int cur_record_size = 0;
   for (int i = 0; i < num_columns; i++) {
-    record_size += (1 + cd_entries[i].col_len);
+    cur_record_size += (1 + cd_entries[i].col_len);
   }
-  // The total record_size must be rounded to a 4-byte boundary.
-  record_size = round_integer(record_size, 4);
+  // The total record_len must be rounded to a 4-byte boundary.
+  cur_record_size = round_integer(cur_record_size, 4);
 
-  tab_header.file_size = sizeof(table_file_header);
-  tab_header.record_size = record_size;
+  tab_header.table_file_len = sizeof(table_file);
+  tab_header.record_len = cur_record_size;
   tab_header.num_records = 0;
-  tab_header.record_offset = sizeof(table_file_header);
-  tab_header.file_header_flag = 0;
+  tab_header.offset = sizeof(table_file);
   tab_header.tpd_ptr = NULL;  // Reset tpd pointer.
 
   char table_filename[MAX_IDENT_LEN + 5];
@@ -2501,7 +2485,7 @@ int create_tab_file(char *table_name, cd_entry cd_entries[], int num_columns) {
   if ((fhandle = fopen(table_filename, "wbc")) == NULL) {
     rc = FILE_OPEN_ERROR;
   } else {
-    fwrite((void *)&tab_header, tab_header.file_size, 1, fhandle);
+    fwrite((void *)&tab_header, tab_header.table_file_len, 1, fhandle);
     fflush(fhandle);
     fclose(fhandle);
   }
@@ -2509,7 +2493,7 @@ int create_tab_file(char *table_name, cd_entry cd_entries[], int num_columns) {
   return rc;
 }
 
-int check_insert_values(field_value field_values[], int num_values,
+int check_insert_values(field_val field_values[], int num_values,
                         cd_entry cd_entries[], int num_columns) {
   int rc = 0;
   if (num_values != num_columns) {
@@ -2517,31 +2501,31 @@ int check_insert_values(field_value field_values[], int num_values,
   }
 
   for (int i = 0; i < num_values; i++) {
-    if (field_values[i].is_null) {
+    if (field_values[i].null_type) {
       // Field value is NULL.
       if (cd_entries[i].col_type == T_INT) {
-        field_values[i].type = FIELD_VALUE_TYPE_INT;
+        field_values[i].type = INT_FIELD;
       } else {
-        field_values[i].type = FIELD_VALUE_TYPE_STRING;
+        field_values[i].type = STRING_FIELD;
       }
       if (cd_entries[i].not_null) {
-        field_values[i].linked_token->tok_value = INVALID;
+        field_values[i].token->tok_value = INVALID;
         rc = UNEXPECTED_NULL_VALUE;
         break;
       }
     } else {
       // Field value is not NULL, so it must be either integer or string.
-      if (field_values[i].type == FIELD_VALUE_TYPE_INT) {
+      if (field_values[i].type == INT_FIELD) {
         if (cd_entries[i].col_type != T_INT) {
-          field_values[i].linked_token->tok_value = INVALID;
+          field_values[i].token->tok_value = INVALID;
           rc = DATA_TYPE_MISMATCH;
           break;
         }
-      } else if (field_values[i].type == FIELD_VALUE_TYPE_STRING) {
+      } else if (field_values[i].type == STRING_FIELD) {
         if ((cd_entries[i].col_type != T_CHAR) ||
             (cd_entries[i].col_len <
-             (int)strlen(field_values[i].string_value))) {
-          field_values[i].linked_token->tok_value = INVALID;
+             (int)strlen(field_values[i].string_field))) {
+          field_values[i].token->tok_value = INVALID;
           rc = DATA_TYPE_MISMATCH;
           break;
         }
@@ -2561,7 +2545,7 @@ void free_token_list(token_list *const t_list) {
   }
 }
 
-int load_table_records(tpd_entry *tpd, table_file_header **pp_table_header) {
+int load_table_records(tpd_entry *tpd, table_file **pp_table_header) {
   int rc = 0;
   char table_filename[MAX_IDENT_LEN + 5];
   sprintf(table_filename, "%s.tab", tpd->table_name);
@@ -2569,11 +2553,11 @@ int load_table_records(tpd_entry *tpd, table_file_header **pp_table_header) {
   if ((fhandle = fopen(table_filename, "rbc")) == NULL) {
     return FILE_OPEN_ERROR;
   }
-  int file_size = get_file_size(fhandle);
-  table_file_header *tab_header = (table_file_header *)malloc(file_size);
-  fread(tab_header, file_size, 1, fhandle);
+  int cur_file_size = get_file_size(fhandle);
+  table_file *tab_header = (table_file *)malloc(cur_file_size);
+  fread(tab_header, cur_file_size, 1, fhandle);
   fclose(fhandle);
-  if (tab_header->file_size != file_size) {
+  if (tab_header->table_file_len != cur_file_size) {
     rc = TABFILE_CORRUPTION;
     free(tab_header);
   }
@@ -2591,46 +2575,46 @@ int get_file_size(FILE *fhandle) {
   return (int)(file_stat.st_size);
 }
 
-int fill_raw_record_bytes(cd_entry cd_entries[], field_value *field_values[],
+int fill_raw_record_bytes(cd_entry cd_entries[], field_val *field_values[],
                           int num_cols, char record_bytes[],
                           int num_record_bytes) {
   memset(record_bytes, '\0', num_record_bytes);
   unsigned char value_length = 0;
   int cur_offset_in_record = 0;
-  int int_value = 0;
-  char *string_value = NULL;
+  int cur_int_value = 0;
+  char *cur_string_value = NULL;
   for (int i = 0; i < num_cols; i++) {
-    if (field_values[i]->type == FIELD_VALUE_TYPE_INT) {
+    if (field_values[i]->type == INT_FIELD) {
       // Store a integer.
-      if (field_values[i]->is_null) {
+      if (field_values[i]->null_type) {
         // Null value.
         value_length = 0;
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += (1 + cd_entries[i].col_len);
       } else {
         // Integer value.
-        int_value = field_values[i]->int_value;
+        cur_int_value = field_values[i]->int_field;
         value_length = cd_entries[i].col_len;
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += 1;
-        memcpy(record_bytes + cur_offset_in_record, &int_value, value_length);
+        memcpy(record_bytes + cur_offset_in_record, &cur_int_value, value_length);
         cur_offset_in_record += cd_entries[i].col_len;
       }
     } else {
       // Store a string.
-      if (field_values[i]->is_null) {
+      if (field_values[i]->null_type) {
         // Null value.
         value_length = 0;
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += (1 + cd_entries[i].col_len);
       } else {
         // String value.
-        string_value = field_values[i]->string_value;
-        value_length = strlen(string_value);
+        cur_string_value = field_values[i]->string_field;
+        value_length = strlen(cur_string_value);
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += 1;
-        memcpy(record_bytes + cur_offset_in_record, string_value,
-               strlen(string_value));
+        memcpy(record_bytes + cur_offset_in_record, cur_string_value,
+               strlen(cur_string_value));
         cur_offset_in_record += cd_entries[i].col_len;
       }
     }
@@ -2644,38 +2628,38 @@ int fill_record_row(cd_entry cd_entries[], int num_cols, record_row *p_row,
 
   int offset_in_record = 0;
   unsigned char value_length = 0;
-  field_value *p_field_value = NULL;
+  field_val *p_field_value = NULL;
   for (int i = 0; i < num_cols; i++) {
     // Get value length.
     memcpy(&value_length, record_bytes + offset_in_record, 1);
     offset_in_record += 1;
 
     // Get field value.
-    p_field_value = (field_value *)malloc(sizeof(field_value));
+    p_field_value = (field_val *)malloc(sizeof(field_val));
     p_field_value->col_id = cd_entries[i].col_id;
-    p_field_value->is_null = (value_length == 0);
-    p_field_value->linked_token = NULL;
+    p_field_value->null_type = (value_length == 0);
+    p_field_value->token = NULL;
     if (cd_entries[i].col_type == T_INT) {
       // Set an integer.
-      p_field_value->type = FIELD_VALUE_TYPE_INT;
-      if (!p_field_value->is_null) {
-        memcpy(&p_field_value->int_value, record_bytes + offset_in_record,
+      p_field_value->type = INT_FIELD;
+      if (!p_field_value->null_type) {
+        memcpy(&p_field_value->int_field, record_bytes + offset_in_record,
                value_length);
       }
     } else {
       // Set a string.
-      p_field_value->type = FIELD_VALUE_TYPE_STRING;
-      if (!p_field_value->is_null) {
-        memcpy(p_field_value->string_value, record_bytes + offset_in_record,
+      p_field_value->type = STRING_FIELD;
+      if (!p_field_value->null_type) {
+        memcpy(p_field_value->string_field, record_bytes + offset_in_record,
                value_length);
-        p_field_value->string_value[value_length] = '\0';
+        p_field_value->string_field[value_length] = '\0';
       }
     }
     p_row->value_ptrs[i] = p_field_value;
     offset_in_record += cd_entries[i].col_len;
   }
   p_row->num_fields = num_cols;
-  p_row->sorting_col_id = -1;
+  p_row->sort_column = -1;
   p_row->next = NULL;
   return offset_in_record;
 }
@@ -2691,7 +2675,7 @@ void print_table_border(cd_entry *sorted_cd_entries[], int num_values) {
 }
 
 void print_table_column_names(cd_entry *sorted_cd_entries[],
-                              field_name field_names[], int num_values) {
+                              record_field_name field_names[], int num_values) {
   int col_gap = 0;
   for (int i = 0; i < num_values; i++) {
     printf("%c %s", '|', field_names[i].name);
@@ -2716,22 +2700,22 @@ void print_record_row(cd_entry *sorted_cd_entries[], int num_cols,
   int col_gap = 0;
   char display_value[MAX_STRING_LEN + 1];
   int col_index = -1;
-  field_value **field_values = row->value_ptrs;
+  field_val **field_values = row->value_ptrs;
   bool left_align = true;
   for (int i = 0; i < num_cols; i++) {
     col_index = sorted_cd_entries[i]->col_id;
     left_align = true;
-    if (!field_values[col_index]->is_null) {
-      if (field_values[col_index]->type == FIELD_VALUE_TYPE_INT) {
+    if (!field_values[col_index]->null_type) {
+      if (field_values[col_index]->type == INT_FIELD) {
         left_align = false;
-        sprintf(display_value, "%d", field_values[col_index]->int_value);
+        sprintf(display_value, "%d", field_values[col_index]->int_field);
       } else {
-        strcpy(display_value, field_values[col_index]->string_value);
+        strcpy(display_value, field_values[col_index]->string_field);
       }
     } else {
       // Display NULL value as a dash.
       strcpy(display_value, "-");
-      left_align = (field_values[col_index]->type == FIELD_VALUE_TYPE_STRING);
+      left_align = (field_values[col_index]->type == STRING_FIELD);
     }
     col_gap =
         column_display_width(sorted_cd_entries[i]) - strlen(display_value) + 1;
@@ -2822,7 +2806,7 @@ bool apply_row_predicate(cd_entry cd_entries[], int num_cols, record_row *p_row,
   }
 
   // Evaluate the first condition.
-  field_value *lhs_operand =
+  field_val *lhs_operand =
       p_row->value_ptrs[p_predicate->conditions[0].col_id];
   bool result = eval_condition(&p_predicate->conditions[0], lhs_operand);
   if (p_predicate->num_conditions == 1) {
@@ -2843,67 +2827,67 @@ bool apply_row_predicate(cd_entry cd_entries[], int num_cols, record_row *p_row,
   return result;
 }
 
-bool eval_condition(record_condition *p_condition, field_value *p_field_value) {
+bool eval_condition(record_condition *p_condition, field_val *p_field_value) {
   bool result = true;
   switch (p_condition->op_type) {
     case S_LESS:
       // Operator "<"
-      if (p_condition->value_type == FIELD_VALUE_TYPE_INT) {
-        if (p_field_value->is_null) {
+      if (p_condition->value_type == INT_FIELD) {
+        if (p_field_value->null_type) {
           result = false;
         } else {
-          result = (p_field_value->int_value < p_condition->int_data_value);
+          result = (p_field_value->int_field < p_condition->int_data_value);
         }
       } else {
-        if (p_field_value->is_null) {
+        if (p_field_value->null_type) {
           result = false;
         } else {
-          result = (strcmp(p_field_value->string_value,
+          result = (strcmp(p_field_value->string_field,
                            p_condition->string_data_value) < 0);
         }
       }
       break;
     case S_EQUAL:
       // Operator "="
-      if (p_condition->value_type == FIELD_VALUE_TYPE_INT) {
-        if (p_field_value->is_null) {
+      if (p_condition->value_type == INT_FIELD) {
+        if (p_field_value->null_type) {
           result = false;
         } else {
-          result = (p_field_value->int_value == p_condition->int_data_value);
+          result = (p_field_value->int_field == p_condition->int_data_value);
         }
       } else {
-        if (p_field_value->is_null) {
+        if (p_field_value->null_type) {
           result = false;
         } else {
-          result = (strcmp(p_field_value->string_value,
+          result = (strcmp(p_field_value->string_field,
                            p_condition->string_data_value) == 0);
         }
       }
       break;
     case S_GREATER:
       // Operator ">"
-      if (p_condition->value_type == FIELD_VALUE_TYPE_INT) {
-        if (p_field_value->is_null) {
+      if (p_condition->value_type == INT_FIELD) {
+        if (p_field_value->null_type) {
           result = false;
         } else {
-          result = (p_field_value->int_value > p_condition->int_data_value);
+          result = (p_field_value->int_field > p_condition->int_data_value);
         }
       } else {
-        if (p_field_value->is_null) {
+        if (p_field_value->null_type) {
           result = false;
         } else {
-          result = (strcmp(p_field_value->string_value,
+          result = (strcmp(p_field_value->string_field,
                            p_condition->string_data_value) > 0);
         }
       }
       break;
     case K_IS:
       // Operator "IS_NULL"
-      result = p_field_value->is_null;
+      result = p_field_value->null_type;
       break;
     case K_NOT:
       // Operator "IS_NOT_NULL"
-      result = !p_field_value->is_null;
+      result = !p_field_value->null_type;
       break;
     default:
       // Return true for unknown relational operators.
@@ -2917,7 +2901,7 @@ bool eval_condition(record_condition *p_condition, field_value *p_field_value) {
 void sort_records(record_row rows[], int num_records, cd_entry *p_sorting_col,
                   bool is_desc) {
   for (int i = 0; i < num_records; i++) {
-    rows[i].sorting_col_id = p_sorting_col->col_id;
+    rows[i].sort_column = p_sorting_col->col_id;
   }
   qsort(rows, num_records, sizeof(record_row), records_comparator);
   record_row temp_record;
@@ -2936,25 +2920,25 @@ void sort_records(record_row rows[], int num_records, cd_entry *p_sorting_col,
 int records_comparator(const void *arg1, const void *arg2) {
   record_row *p_record1 = (record_row *)arg1;
   record_row *p_record2 = (record_row *)arg2;
-  int sorting_col_id = p_record1->sorting_col_id;
+  int sort_column = p_record1->sort_column;
 
   // If result < 0, elem1 less than elem2;
   // If result = 0, elem1 equivalent to elem2;
   // If result > 0, elem1 greater than elem2.
   int result = 0;
-  field_value *p_value1 = p_record1->value_ptrs[sorting_col_id];
-  field_value *p_value2 = p_record2->value_ptrs[sorting_col_id];
-  if (p_value1->type == FIELD_VALUE_TYPE_INT) {
+  field_val *p_value1 = p_record1->value_ptrs[sort_column];
+  field_val *p_value2 = p_record2->value_ptrs[sort_column];
+  if (p_value1->type == INT_FIELD) {
     // Compare 2 integers.
     // NULL is smaller than any other values.
-    if (p_value1->is_null) {
-      result = (p_value2->is_null ? 0 : -1);
+    if (p_value1->null_type) {
+      result = (p_value2->null_type ? 0 : -1);
     } else {
-      if (p_value2->is_null) {
+      if (p_value2->null_type) {
         result = 1;
-      } else if (p_value1->int_value < p_value2->int_value) {
+      } else if (p_value1->int_field < p_value2->int_field) {
         result = -1;
-      } else if (p_value1->int_value > p_value2->int_value) {
+      } else if (p_value1->int_field > p_value2->int_field) {
         result = 1;
       } else {
         result = 0;
@@ -2963,13 +2947,13 @@ int records_comparator(const void *arg1, const void *arg2) {
   } else {
     // Compare 2 strings.
     // NULL is smaller than any other values.
-    if (p_value1->is_null) {
-      result = (p_value2->is_null ? 0 : -1);
+    if (p_value1->null_type) {
+      result = (p_value2->null_type ? 0 : -1);
     } else {
-      if (p_value2->is_null) {
+      if (p_value2->null_type) {
         result = 1;
       } else {
-        result = strcmp(p_value1->string_value, p_value2->string_value);
+        result = strcmp(p_value1->string_field, p_value2->string_field);
       }
     }
   }
@@ -2992,7 +2976,7 @@ void free_record_row(record_row *row, bool to_last) {
   }
 }
 
-int save_records_to_file(table_file_header *const tab_header,
+int save_records_to_file(table_file *const tab_header,
                          record_row *const rows_head) {
   int rc = 0;
   tpd_entry *const tab_entry = tab_header->tpd_ptr;
@@ -3005,8 +2989,8 @@ int save_records_to_file(table_file_header *const tab_header,
   }
 
   tab_header->num_records = num_rows;
-  tab_header->file_size =
-      sizeof(table_file_header) + tab_header->record_size * num_rows;
+  tab_header->table_file_len =
+      sizeof(table_file) + tab_header->record_len * num_rows;
   tab_header->tpd_ptr = NULL;  // Reset tpd pointer.
 
   char table_filename[MAX_IDENT_LEN + 5];
@@ -3015,18 +2999,18 @@ int save_records_to_file(table_file_header *const tab_header,
   if ((fhandle = fopen(table_filename, "wbc")) == NULL) {
     rc = FILE_OPEN_ERROR;
   } else {
-    fwrite(tab_header, tab_header->record_offset, 1, fhandle);
+    fwrite(tab_header, tab_header->offset, 1, fhandle);
 
-    char *record_raw_bytes = (char *)malloc(tab_header->record_size);
+    char *record_raw_bytes = (char *)malloc(tab_header->record_len);
     cd_entry *cd_entries = NULL;
     get_cd_entries(tab_entry, &cd_entries);
     current_row = rows_head;
     while (current_row) {
-      memset(record_raw_bytes, '\0', tab_header->record_size);
+      memset(record_raw_bytes, '\0', tab_header->record_len);
       fill_raw_record_bytes(cd_entries, current_row->value_ptrs,
                             tab_entry->num_columns, record_raw_bytes,
-                            tab_header->record_size);
-      fwrite(record_raw_bytes, tab_header->record_size, 1, fhandle);
+                            tab_header->record_len);
+      fwrite(record_raw_bytes, tab_header->record_len, 1, fhandle);
       current_row = current_row->next;
     }
     free(record_raw_bytes);
