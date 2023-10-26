@@ -186,7 +186,7 @@ typedef enum error_return_codes
 	INVALID_COLUMN_LENGTH,			// -389
   	INVALID_REPORT_FILE_NAME,		// -388
 	INVALID_VALUE,              // -387
-	INVALID_VALUES_COUNT,       // -386
+	VALUE_COUNT_MISMATCH,       // -386
 	INVALID_AGGREGATE_COLUMN,   // -385
 	INVALID_CONDITION,          // -384
 	INVALID_CONDITION_OPERAND,  // -383
@@ -288,12 +288,12 @@ int add_tpd_to_list(tpd_entry *tpd);
 int drop_tpd_from_list(char *tabname);
 tpd_entry* get_tpd_from_list(char *tabname);
 int create_tab_file(char *table_name, cd_entry cd_entries[], int num_columns);
-int check_insert_values(field_val field_values[], int num_values,
+int check(field_val values[], int num_values,
                         cd_entry cd_entries[], int num_columns);
 void free_token_list(token_list *const t_list);
-int load_table_records(tpd_entry *tpd, table_file **pp_table_header);
+int fetch_records(tpd_entry *tpd, table_file **pp_table_header);
 int get_file_size(FILE *fhandle);
-int fill_raw_record_bytes(cd_entry cd_entries[], field_val *field_values[],
+int fill_raw_record_bytes(cd_entry cd_entries[], field_val *values[],
                           int num_cols, char record_bytes[],
                           int num_record_bytes);
 int fill_record_row(cd_entry cd_entries[], int num_cols, record_row *p_row,
@@ -330,10 +330,6 @@ void rename_table_file(tpd_entry *table_entry);
 int update_db_flags(int db_flags);
 bool is_timestamp_valid(char *text);
 int max_days_of_month(int year, int month);
-
-inline void get_cd_entries(tpd_entry *tab_entry, cd_entry **pp_cd_entry) {
-  *pp_cd_entry = (cd_entry *)(((char *)tab_entry) + tab_entry->cd_offset);
-}
 
 /* Get pointer to the first record in a table. */
 inline void get_table_records(table_file *tab_header, char **pp_record) {
@@ -1257,10 +1253,11 @@ int sem_list_schema(token_list *t_list)
 }
 
 int sem_insert(token_list *t_list) {
-	int rc = 0;
 	token_list *cur = t_list;
-	printf("heree-1");
-	if (!can_be_identifier(cur)) {
+	int rc = 0;
+	if ((cur->tok_class != keyword) &&
+			(cur->tok_class != identifier) &&
+				(cur->tok_class != type_name)){
 		rc = INVALID_TABLE_NAME;
 		cur->tok_value = INVALID;
 		return rc;
@@ -1283,40 +1280,29 @@ int sem_insert(token_list *t_list) {
 
 	cur = cur->next->next;
 
-	field_val *field_values = (field_val *)calloc(MAX_NUM_COL, sizeof(field_val));
+	field_val *values = (field_val *)calloc(MAX_NUM_COL, sizeof(field_val));
 	int num_values = 0;
 	while (true) {
-		// Check if values count is greater than MAX_NUM_COL.
-		if (num_values >= MAX_NUM_COL) {
-			rc = MAX_COLUMN_EXCEEDED;
-			cur->tok_value = INVALID;
-			return rc;
-		}
-
 		if (cur->tok_value == STRING_LITERAL) {
-			field_values[num_values].type = STRING_FIELD;
-			field_values[num_values].null_type = false;
-			strcpy(field_values[num_values].string_field, cur->tok_string);
-			field_values[num_values].token = cur;
-			field_values[num_values].col_id = num_values;
+			values[num_values].type = STRING_FIELD;
+			values[num_values].null_type = false;
+			strcpy(values[num_values].string_field, cur->tok_string);
 		}
 		else if (cur->tok_value == INT_LITERAL) {
-			field_values[num_values].type = INT_FIELD;
-			field_values[num_values].null_type = false;
-			field_values[num_values].int_field = atoi(cur->tok_string);
-			field_values[num_values].token = cur;
-			field_values[num_values].col_id = num_values;
+			values[num_values].type = INT_FIELD;
+			values[num_values].null_type = false;
+			values[num_values].int_field = atoi(cur->tok_string);
 		}
 		else if (cur->tok_value == K_NULL) {
-			field_values[num_values].type = UNKNOWN_FIELD;
-			field_values[num_values].null_type = true;
-			field_values[num_values].token = cur;
-			field_values[num_values].col_id = num_values;
+			values[num_values].type = UNKNOWN_FIELD;
+			values[num_values].null_type = true;
 		}
 		else {
 			rc = INVALID_VALUE;
 			break;
 		}
+		values[num_values].token = cur;
+		values[num_values].col_id = num_values;
 		cur = cur->next;
 		if (cur->tok_value == S_COMMA) {
 		}
@@ -1332,7 +1318,6 @@ int sem_insert(token_list *t_list) {
 		cur = cur->next;
 		num_values++;
 	}
-	printf("heree-2");
 	if (cur->tok_value != EOC) {
 		rc = INVALID_STATEMENT;
 		cur->tok_value = INVALID;
@@ -1344,24 +1329,44 @@ int sem_insert(token_list *t_list) {
 		return rc;
 	}
 
-	cd_entry *cd_entries = NULL;
-	get_cd_entries(tab_entry, &cd_entries);
-	// The order and number of columns must be the same for field_values and
-	// cd_entries.
-	rc = check_insert_values(field_values, num_values, cd_entries,
-		tab_entry->num_columns);
+	cd_entry *cd_entries = (cd_entry *)(((char *)tab_entry) + tab_entry->cd_offset);
+	if (num_values != tab_entry->num_columns) {
+		rc = VALUE_COUNT_MISMATCH;
+		cur->tok_value = INVALID;
+		return rc;
+	}
 
+	for (int i = 0; i < num_values; i++) {
+		if (values[i].null_type) {
+			if (cd_entries[i].col_type == T_INT) {
+				values[i].type = INT_FIELD;
+			} else {
+				values[i].type = STRING_FIELD;
+			}
+		} else {
+			if (values[i].type == INT_FIELD) {
+				if (cd_entries[i].col_type != T_INT) {
+				values[i].token->tok_value = INVALID;
+				rc = DATA_TYPE_MISMATCH;
+				break;
+				}
+			} else if (values[i].type == STRING_FIELD) {
+				if ((cd_entries[i].col_type != T_CHAR) ||
+					(cd_entries[i].col_len <
+					(int)strlen(values[i].string_field))) {
+				values[i].token->tok_value = INVALID;
+				rc = DATA_TYPE_MISMATCH;
+				break;
+				}
+			}
+		}
+	}
 	if (rc) {
 		cur->tok_value = INVALID;
 		return rc;
 	}
-	printf("heree2");
-	// It is the heap memory owner of the content of the whole table.
-	// Do not forget to free it later.
 	table_file *tab_header = NULL;
-	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
-		
-	printf("heree3");
+	if ((rc = fetch_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
 	if (tab_header->num_records >= MAX_NUM_ROW) {
@@ -1369,17 +1374,13 @@ int sem_insert(token_list *t_list) {
 		free(tab_header);
 		return rc;
 	}
-	printf("heree4");
-	// Compose the new record.
 	char *record_bytes = (char *)malloc(tab_header->record_len);
 	field_val *field_value_ptrs[MAX_NUM_COL];
 	for (int i = 0; i < num_values; i++) {
-		field_value_ptrs[i] = &field_values[i];
+		field_value_ptrs[i] = &values[i];
 	}
 	fill_raw_record_bytes(cd_entries, field_value_ptrs, num_values, record_bytes,
 		tab_header->record_len);
-	printf("heree0");
-	// Append the new record to the .tab file.
 	char table_filename[MAX_IDENT_LEN + 5];
 	sprintf(table_filename, "%s.tab", tab_header->tpd_ptr->table_name);
 	FILE *fhandle = NULL;
@@ -1387,12 +1388,10 @@ int sem_insert(token_list *t_list) {
 		rc = FILE_OPEN_ERROR;
 	}
 	else {
-		// Add one more record in the table header.
 		int old_table_file_size = tab_header->table_file_len;
 		tab_header->num_records++;
 		tab_header->table_file_len += tab_header->record_len;
-		tab_header->tpd_ptr = NULL;  // Reset tpd pointer.
-
+		tab_header->tpd_ptr = NULL;
 		fwrite(tab_header, old_table_file_size, 1, fhandle);
 		fwrite(record_bytes, tab_header->record_len, 1, fhandle);
 		fflush(fhandle);
@@ -1405,13 +1404,12 @@ int sem_insert(token_list *t_list) {
 
 
 int sem_select(token_list *t_list) {
-	int rc = 0;
-	token_list *cur = t_list;
-
 	record_field_name field_names[MAX_NUM_COL];
 	bool fields_done = false;
 	int wildcard_field_index = -1;
 	int num_fields = 0;
+	int rc = 0;
+	token_list *cur = t_list;
 
 	// Try parse aggregate operator: SUM, AVG, or COUNT.
 	int aggregate_type = 0;
@@ -1503,8 +1501,7 @@ int sem_select(token_list *t_list) {
 	}
 
 	// Get column descriptors.
-	cd_entry *cd_entries = NULL;
-	get_cd_entries(tab_entry, &cd_entries);
+	cd_entry *cd_entries = (cd_entry *)(((char *)tab_entry) + tab_entry->cd_offset);
 
 	// Expand wildcard field to all field names of the table.
 	if (wildcard_field_index == 0) {
@@ -1670,7 +1667,7 @@ int sem_select(token_list *t_list) {
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
 	table_file *tab_header = NULL;
-	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
+	if ((rc = fetch_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
 
@@ -1772,8 +1769,7 @@ int sem_update(token_list *t_list) {
 	}
 
 	// Get column descriptors.
-	cd_entry *cd_entries = NULL;
-	get_cd_entries(tab_entry, &cd_entries);
+	cd_entry *cd_entries = (cd_entry *)(((char *)tab_entry) + tab_entry->cd_offset);
 
 	cur = cur->next;
 	if (cur->tok_value != K_SET) {
@@ -1950,7 +1946,7 @@ int sem_update(token_list *t_list) {
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
 	table_file *tab_header = NULL;
-	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
+	if ((rc = fetch_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
 
@@ -2078,8 +2074,7 @@ int sem_delete(token_list *t_list) {
 	}
 
 	// Get column descriptors.
-	cd_entry *cd_entries = NULL;
-	get_cd_entries(tab_entry, &cd_entries);
+	cd_entry *cd_entries = (cd_entry *)(((char *)tab_entry) + tab_entry->cd_offset);
 
 	bool has_where_clause = false;
 	record_predicate row_filter;
@@ -2165,7 +2160,7 @@ int sem_delete(token_list *t_list) {
 	// It is the heap memory owner of the content of the whole table.
 	// Do not forget to free it later.
 	table_file *tab_header = NULL;
-	if ((rc = load_table_records(tab_entry, &tab_header)) != 0) {
+	if ((rc = fetch_records(tab_entry, &tab_header)) != 0) {
 		return rc;
 	}
 
@@ -2493,39 +2488,39 @@ int create_tab_file(char *table_name, cd_entry cd_entries[], int num_columns) {
   return rc;
 }
 
-int check_insert_values(field_val field_values[], int num_values,
+int check(field_val values[], int num_values,
                         cd_entry cd_entries[], int num_columns) {
   int rc = 0;
   if (num_values != num_columns) {
-    return INVALID_VALUES_COUNT;
+    return VALUE_COUNT_MISMATCH;
   }
 
   for (int i = 0; i < num_values; i++) {
-    if (field_values[i].null_type) {
+    if (values[i].null_type) {
       // Field value is NULL.
       if (cd_entries[i].col_type == T_INT) {
-        field_values[i].type = INT_FIELD;
+        values[i].type = INT_FIELD;
       } else {
-        field_values[i].type = STRING_FIELD;
+        values[i].type = STRING_FIELD;
       }
       if (cd_entries[i].not_null) {
-        field_values[i].token->tok_value = INVALID;
+        values[i].token->tok_value = INVALID;
         rc = UNEXPECTED_NULL_VALUE;
         break;
       }
     } else {
       // Field value is not NULL, so it must be either integer or string.
-      if (field_values[i].type == INT_FIELD) {
+      if (values[i].type == INT_FIELD) {
         if (cd_entries[i].col_type != T_INT) {
-          field_values[i].token->tok_value = INVALID;
+          values[i].token->tok_value = INVALID;
           rc = DATA_TYPE_MISMATCH;
           break;
         }
-      } else if (field_values[i].type == STRING_FIELD) {
+      } else if (values[i].type == STRING_FIELD) {
         if ((cd_entries[i].col_type != T_CHAR) ||
             (cd_entries[i].col_len <
-             (int)strlen(field_values[i].string_field))) {
-          field_values[i].token->tok_value = INVALID;
+             (int)strlen(values[i].string_field))) {
+          values[i].token->tok_value = INVALID;
           rc = DATA_TYPE_MISMATCH;
           break;
         }
@@ -2545,7 +2540,7 @@ void free_token_list(token_list *const t_list) {
   }
 }
 
-int load_table_records(tpd_entry *tpd, table_file **pp_table_header) {
+int fetch_records(tpd_entry *tpd, table_file **pp_table_header) {
   int rc = 0;
   char table_filename[MAX_IDENT_LEN + 5];
   sprintf(table_filename, "%s.tab", tpd->table_name);
@@ -2575,7 +2570,7 @@ int get_file_size(FILE *fhandle) {
   return (int)(file_stat.st_size);
 }
 
-int fill_raw_record_bytes(cd_entry cd_entries[], field_val *field_values[],
+int fill_raw_record_bytes(cd_entry cd_entries[], field_val *values[],
                           int num_cols, char record_bytes[],
                           int num_record_bytes) {
   memset(record_bytes, '\0', num_record_bytes);
@@ -2584,16 +2579,16 @@ int fill_raw_record_bytes(cd_entry cd_entries[], field_val *field_values[],
   int cur_int_value = 0;
   char *cur_string_value = NULL;
   for (int i = 0; i < num_cols; i++) {
-    if (field_values[i]->type == INT_FIELD) {
+    if (values[i]->type == INT_FIELD) {
       // Store a integer.
-      if (field_values[i]->null_type) {
+      if (values[i]->null_type) {
         // Null value.
         value_length = 0;
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += (1 + cd_entries[i].col_len);
       } else {
         // Integer value.
-        cur_int_value = field_values[i]->int_field;
+        cur_int_value = values[i]->int_field;
         value_length = cd_entries[i].col_len;
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += 1;
@@ -2602,14 +2597,14 @@ int fill_raw_record_bytes(cd_entry cd_entries[], field_val *field_values[],
       }
     } else {
       // Store a string.
-      if (field_values[i]->null_type) {
+      if (values[i]->null_type) {
         // Null value.
         value_length = 0;
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += (1 + cd_entries[i].col_len);
       } else {
         // String value.
-        cur_string_value = field_values[i]->string_field;
+        cur_string_value = values[i]->string_field;
         value_length = strlen(cur_string_value);
         memcpy(record_bytes + cur_offset_in_record, &value_length, 1);
         cur_offset_in_record += 1;
@@ -2700,22 +2695,22 @@ void print_record_row(cd_entry *sorted_cd_entries[], int num_cols,
   int col_gap = 0;
   char display_value[MAX_STRING_LEN + 1];
   int col_index = -1;
-  field_val **field_values = row->value_ptrs;
+  field_val **values = row->value_ptrs;
   bool left_align = true;
   for (int i = 0; i < num_cols; i++) {
     col_index = sorted_cd_entries[i]->col_id;
     left_align = true;
-    if (!field_values[col_index]->null_type) {
-      if (field_values[col_index]->type == INT_FIELD) {
+    if (!values[col_index]->null_type) {
+      if (values[col_index]->type == INT_FIELD) {
         left_align = false;
-        sprintf(display_value, "%d", field_values[col_index]->int_field);
+        sprintf(display_value, "%d", values[col_index]->int_field);
       } else {
-        strcpy(display_value, field_values[col_index]->string_field);
+        strcpy(display_value, values[col_index]->string_field);
       }
     } else {
       // Display NULL value as a dash.
       strcpy(display_value, "-");
-      left_align = (field_values[col_index]->type == STRING_FIELD);
+      left_align = (values[col_index]->type == STRING_FIELD);
     }
     col_gap =
         column_display_width(sorted_cd_entries[i]) - strlen(display_value) + 1;
@@ -3002,8 +2997,7 @@ int save_records_to_file(table_file *const tab_header,
     fwrite(tab_header, tab_header->offset, 1, fhandle);
 
     char *record_raw_bytes = (char *)malloc(tab_header->record_len);
-    cd_entry *cd_entries = NULL;
-    get_cd_entries(tab_entry, &cd_entries);
+    cd_entry *cd_entries = (cd_entry *)(((char *)tab_entry) + tab_entry->cd_offset);
     current_row = rows_head;
     while (current_row) {
       memset(record_raw_bytes, '\0', tab_header->record_len);
