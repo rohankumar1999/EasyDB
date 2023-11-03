@@ -289,21 +289,21 @@ int check_insert_values(field_value field_values[], int num_values,
 void free_token_list(token_list *const t_list);
 int load_table_records(tpd_entry *tpd, table_file_header **pp_table_header);
 int get_file_size(FILE *fhandle);
-int fill_raw_record_bytes(cd_entry cd_entries[], field_value *field_values[],
+int fill_bytes(cd_entry cd_entries[], field_value *field_values[],
                           int num_cols, char record_bytes[],
                           int num_record_bytes);
-int fill_record_row(cd_entry cd_entries[], int num_cols, record_row *p_row,
+int fill_row(cd_entry cd_entries[], int num_cols, record_row *p_row,
                     char record_bytes[]);
 void print_table_border(cd_entry *sorted_cd_entries[], int num_values);
-void print_table_column_names(cd_entry *sorted_cd_entries[],
+void print_cols(cd_entry *sorted_cd_entries[],
                               field_name field_names[], int num_values);
-void print_record_row(cd_entry *sorted_cd_entries[], int num_cols,
+void print_row(cd_entry *sorted_cd_entries[], int num_cols,
                       record_row *row);
 void print_aggregate_result(int aggregate_type, int num_fields,
                             int records_count, int int_sum,
                             cd_entry *sorted_cd_entries[]);
 int column_display_width(cd_entry *col_entry);
-int get_cd_entry_index(cd_entry cd_entries[], int num_cols, char *col_name);
+int get_idx(cd_entry cd_entries[], int num_cols, char *col_name);
 bool apply_row_predicate(cd_entry cd_entries[], int num_cols, record_row *p_row,
                          record_predicate *p_predicate);
 bool eval_condition(record_condition *p_condition, field_value *p_field_value);
@@ -332,7 +332,7 @@ inline void get_cd_entries(tpd_entry *tab_entry, cd_entry **pp_cd_entry) {
 }
 
 /* Get pointer to the first record in a table. */
-inline void get_table_records(table_file_header *tab_header, char **pp_record) {
+inline void get_records(table_file_header *tab_header, char **pp_record) {
   *pp_record = NULL;
   if (tab_header->file_size > tab_header->record_offset) {
     *pp_record = ((char *)tab_header) + tab_header->record_offset;
